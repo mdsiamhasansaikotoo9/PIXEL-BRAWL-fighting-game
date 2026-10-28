@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Brawl — 2D Fighting Game</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#101322; color:#f5f7ff; font-family:system-ui,Segoe UI,Arial,sans-serif; display:flex; min-height:100vh; align-items:center; justify-content:center; padding:18px; }
+  .wrap { width:min(100%, 1000px); }
+  h1 { margin:0 0 5px; letter-spacing:.06em; }
+  .sub { color:#b9c2e4; margin:0 0 14px; }
+  canvas { width:100%; aspect-ratio: 16/9; display:block; border:2px solid #4b557e; border-radius:12px; background:#171d38; box-shadow:0 18px 55px #0008; }
+  .controls { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px; }
+  .panel { background:#1a2038; border:1px solid #343d61; border-radius:10px; padding:12px 14px; color:#dbe2ff; line-height:1.6; }
+  .panel strong { color:#fff; }
+  .actions { display:flex; gap:10px; margin:12px 0; flex-wrap:wrap; }
+  button { cursor:pointer; border:0; border-radius:8px; padding:10px 16px; font-weight:700; background:#f5b942; color:#171322; }
+  button.secondary { background:#303958; color:white; border:1px solid #4b557e; }
+  .note { color:#9da8ce; font-size:.88rem; margin-top:10px; }
+  @media(max-width:650px){ .controls{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>PIXEL BRAWL</h1>
+  <p class="sub">A tiny two-player arcade fighting game — no installation required.</p>
+  <canvas id="game" width="960" height="540" aria-label="Pixel Brawl fighting game"></canvas>
+  <div class="actions">
+    <button id="restart">Restart Match</button>
+    <button class="secondary" id="pause">Pause</button>
+  </div>
+  <div class="controls">
+    <div class="panel"><strong>PLAYER 1 — BLUE</strong><br>Move: <strong>A / D</strong> · Jump: <strong>W</strong><br>Punch: <strong>F</strong> · Kick: <strong>G</strong></div>
+    <div class="panel"><strong>PLAYER 2 — RED</strong><br>Move: <strong>← / →</strong> · Jump: <strong>↑</strong><br>Punch: <strong>K</strong> · Kick: <strong>L</strong></div>
+  </div>
+  <p class="note">Tip: get close to your opponent before punching or kicking. Works in a modern Windows browser; press a key once the game is focused.</p>
+</div>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height, FLOOR = 438;
+  const keys = new Set();
+  let paused = false, over = false, winner = '', frame = 0, timeLeft = 60;
+  let lastTime = performance.now(), timerAccumulator = 0;
+
+  function fighter(x, color, dark, facing) {
+    return { x, y:FLOOR-100, w:46, h:100, vx:0, vy:0, color, dark, facing,
+      hp:100, grounded:true, attack:null, attackCooldown:0, hurt:0, walk:0, name:color==='blue'?'PLAYER 1':'PLAYER 2' };
+  }
+  let p1, p2;
+  function reset() {
+    p1=fighter(210,'blue','#183a9b',1); p2=fighter(704,'red','#9d202c',-1);
+    paused=false; over=false; winner=''; frame=0; timeLeft=60; timerAccumulator=0;
+    document.getElementById('pause').textContent='Pause';
+  }
+  reset();
+
+  const held = (...codes) => codes.some(c => keys.has(c));
+  function attack(p, kind) {
+    if (over || paused || p.attackCooldown>0 || p.hurt>0) return;
+    p.attack = {kind, age:0, hit:false};
+    p.attackCooldown = kind==='kick' ? 34 : 24;
+  }
+  function updateFighter(p, opponent, controls, dt) {
+    if (p.attackCooldown>0) p.attackCooldown -= dt;
+    if (p.hurt>0) p.hurt -= dt;
+    if (p.attack) {
+      p.attack.age += dt;
+      const active = p.attack.age > 5 && p.attack.age < 12;
+      if (active && !p.attack.hit) {
+        const reach = p.attack.kind==='kick' ? 78 : 60;
+        const center = p.x + p.w/2;
+        const oc = opponent.x + opponent.w/2;
+        const inFront = (oc-center)*p.facing > 0;
+        const close = Math.abs(oc-center) < reach + 18 && Math.abs((p.y+p.h/2)-(opponent.y+opponent.h/2)) < 75;
+        if (inFront && close) {
+          opponent.hp = Math.max(0, opponent.hp - (p.attack.kind==='kick' ? 12 : 7));
+          opponent.hurt = 9;
+          opponent.vx = p.facing * (p.attack.kind==='kick' ? 5.2 : 3.2);
+          opponent.vy = p.attack.kind==='kick' ? -2.3 : -1;
+          p.attack.hit = true;
+          if (opponent.hp <= 0) { over=true; winner=p.name; }
+        }
+      }
+      if (p.attack && p.attack.age > (p.attack.kind==='kick'?22:17)) p.attack=null;
+    }
+    if (p.hurt<=0 && !p.attack) {
+      p.vx = 0;
+      if (held(...controls.left)) p.vx = -3.4;
+      if (held(...controls.right)) p.vx = 3.4;
+      if (p.vx) p.walk += dt;
+    } else if (p.hurt>0) p.vx *= .9;
+    p.x += p.vx * dt;
+    p.x = Math.max(24, Math.min(W-p.w-24, p.x));
+    p.vy += 0.48*dt;
+    p.y += p.vy*dt;
+    if (p.y+p.h >= FLOOR) { p.y=FLOOR-p.h; p.vy=0; p.grounded=true; } else p.grounded=false;
+  }
+
+  function rect(x,y,w,h,color) { ctx.fillStyle=color; ctx.fillRect(Math.round(x),Math.round(y),w,h); }
+  function drawBackground() {
+    const sky=ctx.createLinearGradient(0,0,0,H); sky.addColorStop(0,'#171d3b'); sky.addColorStop(1,'#5a345d');
+    rect(0,0,W,H,sky);
+    // Moon and stars
+    ctx.fillStyle='#ffe7a6'; ctx.beginPath(); ctx.arc(785,95,34,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#171d3b'; ctx.beginPath(); ctx.arc(800,84,31,0,Math.PI*2); ctx.fill();
+    for(let i=0;i<42;i++){ let x=(i*137+29)%W, y=(i*71+17)%245; rect(x,y,2,2,'#d8e1ff'); }
+    // distant skyline
+    for(let i=0;i<16;i++){ let bw=38+(i*17)%38, bh=65+(i*31)%115, x=i*64-5; rect(x,FLOOR-bh,bw,bh,'#242947'); for(let wy=FLOOR-bh+12;wy<FLOOR-10;wy+=18) for(let wx=x+8;wx<x+bw-4;wx+=14) if((wx+wy)%3<2) rect(wx,wy,5,7,'#e7a85c55'); }
+    // floor
+    rect(0,FLOOR,W,H-FLOOR,'#20283e'); rect(0,FLOOR,W,5,'#f5b942');
+    for(let i=0;i<W;i+=48) { rect(i,FLOOR+22,24,2,'#39445e'); rect(i+20,FLOOR+54,18,2,'#303a52'); }
+    // floor perspective lines
+    ctx.strokeStyle='#303a52'; ctx.lineWidth=1;
+    for(let i=0;i<=W;i+=80){ctx.beginPath();ctx.moveTo(W/2,FLOOR);ctx.lineTo(i,H);ctx.stroke();}
+  }
+  function drawFighter(p) {
+    const x=Math.round(p.x), y=Math.round(p.y), cx=x+p.w/2;
+    // shadow
+    ctx.fillStyle='#080b18aa'; ctx.beginPath(); ctx.ellipse(cx,FLOOR+4,34,7,0,0,Math.PI*2); ctx.fill();
+    // tiny bounce while walking
+    const bob = p.grounded && p.vx!==0 ? Math.sin(p.walk*.7)*2 : 0;
+    const yy=y+bob;
+    // legs
+    const legSwing = p.grounded && p.vx!==0 ? Math.sin(p.walk*.65)*7 : 0;
+    rect(x+8,yy+67,13,27,p.dark); rect(x+27,yy+67,13,27,p.dark);
+    rect(x+5+legSwing,yy+89,19,10,p.color); rect(x+25-legSwing,yy+89,19,10,p.color);
+    // torso and belt
+    rect(x+6,yy+34,35,37,p.color); rect(x+6,yy+58,35,6,'#f5b942');
+    // arm behind
+    rect(x+(p.facing===1?0:34),yy+40,12,26,p.dark);
+    // head, hair/headband
+    rect(x+10,yy+4,27,28,'#f0bd91'); rect(x+8,yy+1,31,9,p.dark);
+    rect(x+(p.facing===1?27:10),yy+16,7,4,'#171322');
+    rect(x+8,yy+10,30,4,'#f5b942');
+    // front arm, extends during attack
+    let armLen=17, armY=yy+42;
+    if(p.attack && p.attack.age>3 && p.attack.age<15){ armLen=p.attack.kind==='kick'?18:39; armY=yy+42; }
+    const armX=p.facing===1 ? x+31 : x+46-armLen;
+    rect(armX,armY,armLen,12,p.color); rect(p.facing===1?armX+armLen-5:armX,armY-2,10,15,'#f0bd91');
+    // kick effect
+    if(p.attack && p.attack.kind==='kick' && p.attack.age>3 && p.attack.age<15){
+      const kx=p.facing===1?x+34:x-34; rect(kx,yy+66,34,11,p.color); rect(kx+(p.facing===1?23:0),yy+65,11,13,'#f0bd91');
+    }
+    if(p.hurt>0 && Math.floor(frame/3)%2===0) { ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.strokeRect(x-3,yy-3,p.w+6,p.h+6); }
+  }
+  function drawHealth(x,y,hp,color,label,flip=false) {
+    ctx.fillStyle='#0b1024';ctx.fillRect(x,y,360,28);
+    ctx.fillStyle='#5b2338';ctx.fillRect(x+4,y+4,352,20);
+    const amount=352*hp/100;
+    ctx.fillStyle=color;ctx.fillRect(flip?x+356-amount:x+4,y+4,amount,20);
+    ctx.strokeStyle='#f4e8c4';ctx.lineWidth=2;ctx.strokeRect(x,y,360,28);
+    ctx.fillStyle='#fff';ctx.font='bold 17px system-ui';ctx.textAlign=flip?'right':'left';ctx.fillText(label,flip?x+360:x,y-7);
+  }
+  function draw() {
+    drawBackground();
+    drawHealth(34,35,p1.hp,'#45b8ff','PLAYER 1');
+    drawHealth(W-394,35,p2.hp,'#ff5964','PLAYER 2',true);
+    ctx.fillStyle='#fff0c2';ctx.font='bold 26px monospace';ctx.textAlign='center';ctx.fillText(String(Math.max(0,Math.ceil(timeLeft))).padStart(2,'0'),W/2,54);
+    drawFighter(p1); drawFighter(p2);
+    if(paused || over) {
+      ctx.fillStyle='#080b18c9';ctx.fillRect(0,0,W,H);
+      ctx.textAlign='center';ctx.fillStyle='#fff';ctx.font='bold 48px system-ui';
+      ctx.fillText(paused?'PAUSED':(winner+' WINS!'),W/2,H/2-8);
+      ctx.font='20px system-ui';ctx.fillStyle='#f5b942';
+      ctx.fillText(paused?'Press Pause to continue':'Press Restart Match to play again',W/2,H/2+34);
+    }
+  }
+  function loop(now) {
+    const dt=Math.min(2,(now-lastTime)/16.667); lastTime=now; frame++;
+    if(!paused&&!over) {
+      updateFighter(p1,p2,{left:['KeyA'],right:['KeyD']},dt);
+      updateFighter(p2,p1,{left:['ArrowLeft'],right:['ArrowRight']},dt);
+      // face each other unless an attack is in progress
+      if(!p1.attack) p1.facing=(p2.x>p1.x)?1:-1;
+      if(!p2.attack) p2.facing=(p1.x>p2.x)?1:-1;
+      timerAccumulator+=dt;
+      if(timerAccumulator>=60){timeLeft=Math.max(0,timeLeft-1);timerAccumulator=0;}
+      if(timeLeft<=0&&!over){over=true;winner=p1.hp===p2.hp?'DRAW':(p1.hp>p2.hp?p1.name:p2.name);}
+    }
+    draw(); requestAnimationFrame(loop);
+  }
+  window.addEventListener('keydown',e=>{
+    const block=['ArrowLeft','ArrowRight','ArrowUp','Space'];
+    if(block.includes(e.code)) e.preventDefault();
+    keys.add(e.code);
+    if(e.repeat)return;
+    if(e.code==='KeyW'&&p1.grounded&&!paused&&!over){p1.vy=-10.5;p1.grounded=false;}
+    if(e.code==='ArrowUp'&&p2.grounded&&!paused&&!over){p2.vy=-10.5;p2.grounded=false;}
+    if(e.code==='KeyF')attack(p1,'punch');
+    if(e.code==='KeyG')attack(p1,'kick');
+    if(e.code==='KeyK')attack(p2,'punch');
+    if(e.code==='KeyL')attack(p2,'kick');
+  });
+  window.addEventListener('keyup',e=>keys.delete(e.code));
+  window.addEventListener('blur',()=>keys.clear());
+  document.getElementById('restart').addEventListener('click',reset);
+  document.getElementById('pause').addEventListener('click',()=>{
+    if(over)return; paused=!paused; document.getElementById('pause').textContent=paused?'Resume':'Pause';
+  });
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
